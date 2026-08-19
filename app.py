@@ -7,6 +7,7 @@ from sklearn.ensemble import RandomForestRegressor
 from sklearn.preprocessing import LabelEncoder
 from sklearn.metrics import mean_absolute_error
 import io
+import datetime
 
 # -----------------------------------------------------------------------------
 # SECTION 1: ANALYTICS ENGINE (Backend Logic)
@@ -35,9 +36,6 @@ class CourseAnalytics:
         
         # Encode categorical data (Course Names)
         le = LabelEncoder()
-        # Handle cases where new courses might appear in future data that weren't in training
-        # For this simple version, we fit on the provided data. 
-        # In production, you would save/load the encoder state.
         try:
             data['course_encoded'] = le.fit_transform(data['course_name'])
             self.label_encoders['course'] = le
@@ -66,6 +64,7 @@ class CourseAnalytics:
 
         # 2. Seasonal/Monthly Trends
         monthly_trends = data.groupby('month')['registered_count'].sum()
+        # Create safe labels
         monthly_trends.index = [f"Month {i}" for i in monthly_trends.index]
         
         # 3. Quarterly Performance
@@ -127,13 +126,10 @@ class CourseAnalytics:
         
         predictions = []
         for item in future_dates_config:
-            # Encode course
             try:
-                # Check if the course exists in our trained encoder
                 if 'course' not in self.label_encoders:
                     raise Exception("Encoder not initialized.")
                 
-                # Handle unknown courses gracefully
                 try:
                     course_code = self.label_encoders['course'].transform([item['course_name']])[0]
                 except ValueError:
@@ -151,7 +147,7 @@ class CourseAnalytics:
                     'course': item['course_name'],
                     'year': item['year'],
                     'month': item['month'],
-                    'predicted_registrations': max(0, pred) # No negative registrations
+                    'predicted_registrations': max(0, pred)
                 })
             except Exception as e:
                 st.error(f"Prediction error for {item['course_name']}: {e}")
@@ -166,7 +162,6 @@ class CourseAnalytics:
 # SECTION 2: STREAMLIT INTERFACE (Frontend)
 # -----------------------------------------------------------------------------
 
-# Page Configuration
 st.set_page_config(
     page_title="Course Registration Intelligence",
     page_icon="📊",
@@ -194,44 +189,58 @@ with st.sidebar:
     st.header("Data Configuration")
     st.info("Upload a CSV with columns: `date`, `course_name`, `registered_count`")
     
-    # Provide a sample download button for testing
-    sample_data = pd.DataFrame({
-        'date': pd.date_range(start='2022-01-01', periods=24, freq='M').repeat(3),
-        'course_name': ['Math 101', 'Math 101', 'Math 101', 'CS 101', 'CS 101', 'CS 101'] * 24,
-        'registered_count': np.random.randint(50, 500, size=72)
-    })
-    # Correcting sample data generation for simplicity
-    dates = pd.date_range(start='2022-01-01', end='2024-12-31', freq='M')
-    courses = ['Math 101', 'CS 101', 'Physics 202', 'History 303']
-    sample_rows = []
-    for date in dates:
-        for course in courses:
-            # Add some seasonality and noise
-            month = date.month
-            base = 100 if 'Math' in course else 50
-            seasonal = 50 * np.sin(2 * np.pi * month / 12)
-            count = int(base + seasonal + np.random.randint(-20, 50))
-            sample_rows.append({
-                'date': date.strftime('%Y-%m-%d'),
-                'course_name': course,
-                'registered_count': max(0, count)
-            })
-    sample_df = pd.DataFrame(sample_rows)
-    
-    csv = sample_df.to_csv(index=False)
-    st.download_button(
-        label="📥 Download Sample Data Template",
-        data=csv,
-        file_name='sample_registration_data.csv',
-        mime='text/csv',
-    )
+    # --- FIXED SAMPLE DATA GENERATION ---
+    # Generating safe, valid sample data without using deprecated pandas features
+    try:
+        courses = ['Math 101', 'CS 101', 'Physics 202', 'History 303']
+        sample_rows = []
+        
+        # Generate dates manually to avoid any pandas frequency alias issues
+        start_date = datetime.datetime(2022, 1, 1)
+        end_date = datetime.datetime(2024, 12, 31)
+        
+        current_date = start_date
+        while current_date <= end_date:
+            for course in courses:
+                month = current_date.month
+                # Simulate realistic data patterns
+                base = 100 if 'Math' in course or 'CS' in course else 50
+                # Add some seasonality (higher in Sept, lower in Dec/Jan)
+                seasonal_factor = 0
+                if month in [9, 10]: seasonal_factor = 0.5  # Peak season
+                if month in [12, 1, 7]: seasonal_factor = -0.5  # Low season
+                
+                count = int(base * (1 + seasonal_factor) + np.random.randint(-10, 10))
+                
+                sample_rows.append({
+                    'date': current_date.strftime('%Y-%m-%d'),
+                    'course_name': course,
+                    'registered_count': max(0, count)
+                })
+            # Move to next month
+            if current_date.month == 12:
+                current_date = datetime.datetime(current_date.year + 1, 1, 1)
+            else:
+                current_date = datetime.datetime(current_date.year, current_date.month + 1, 1)
+                
+        sample_df = pd.DataFrame(sample_rows)
+        csv = sample_df.to_csv(index=False)
+        
+        st.download_button(
+            label="📥 Download Sample Data Template",
+            data=csv,
+            file_name='sample_registration_data.csv',
+            mime='text/csv',
+        )
+    except Exception as e:
+        st.error(f"Error generating sample data: {e}")
+        st.stop()
     
     uploaded_file = st.file_uploader("Upload Dataset (CSV)", type=['csv'])
     
     if uploaded_file is not None:
         try:
             df = pd.read_csv(uploaded_file)
-            # Validate columns
             required_columns = ['date', 'course_name', 'registered_count']
             if not all(col in df.columns for col in required_columns):
                 st.error(f"Missing columns. Required: {required_columns}")
@@ -240,8 +249,6 @@ with st.sidebar:
             st.session_state.data_loaded = True
             st.success("Data loaded successfully!")
             st.info(f"Records found: {len(df)}")
-            
-            # Show sample
             st.write("### Data Preview")
             st.dataframe(df.head())
             
@@ -263,10 +270,8 @@ with tab1:
     
     if st.button("Generate Performance Report", type="primary"):
         try:
-            # Get analytics
             results = st.session_state.analytics.get_performance_overview(df)
             
-            # 1. Top/Bottom Courses
             col1, col2 = st.columns(2)
             with col1:
                 st.subheader("🏆 Top Performing Courses (Total)")
@@ -284,7 +289,6 @@ with tab1:
                 else:
                     st.write("No data available.")
 
-            # 2. Seasonal Trends
             st.subheader("📅 Seasonal & Monthly Trends")
             fig_monthly = px.line(
                 x=results['monthly_trends'].index, 
@@ -319,7 +323,6 @@ with tab2:
         st.divider()
         st.subheader("Generate Future Forecast")
         
-        # Simple interface to generate future scenarios
         st.write("Enter parameters to simulate future performance:")
         
         col_a, col_b, col_c = st.columns(3)
@@ -343,7 +346,7 @@ with tab2:
                         label=f"Predicted Registrations for {selected_course}",
                         value=f"{pred_df['predicted_registrations'].iloc[0]:.0f}"
                     )
-                    st.caption("Note: Predictions are based on historical patterns. Actual results may vary due to market changes.")
+                    st.caption("Note: Predictions are based on historical patterns. Actual results may vary.")
                 else:
                     st.warning("Could not generate prediction. Ensure the course exists in training data.")
             except Exception as e:
@@ -362,7 +365,6 @@ with tab3:
             st.subheader("Course Performance by Quarter")
             st.write("Heatmap showing registration intensity. Darker colors indicate higher volume.")
             
-            # Heatmap
             fig_heatmap = px.imshow(
                 results['course_quarter_matrix'],
                 labels={'x': 'Quarter', 'y': 'Course', 'color': 'Registrations'},
@@ -381,6 +383,5 @@ with tab3:
             st.error(f"Report generation failed: {e}")
             st.error(f"Details: {str(e)}")
 
-# Footer
 st.markdown("---")
 st.markdown("Generated by Course Intelligence System | Powered by Python & Streamlit")
