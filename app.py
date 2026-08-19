@@ -3,385 +3,586 @@ import pandas as pd
 import numpy as np
 import plotly.express as px
 import plotly.graph_objects as go
+from plotly.subplots import make_subplots
 from sklearn.ensemble import RandomForestRegressor
 from sklearn.preprocessing import LabelEncoder
 from sklearn.metrics import mean_absolute_error
-import io
 import datetime
 
 # -----------------------------------------------------------------------------
-# SECTION 1: ANALYTICS ENGINE (Backend Logic)
+# MARKETING INTELLIGENCE SYSTEM
+# Purpose: Help marketing team know WHEN to promote WHICH courses
 # -----------------------------------------------------------------------------
 
-class CourseAnalytics:
+st.set_page_config(
+    page_title="Course Marketing Intelligence Dashboard",
+    page_icon="📊",
+    layout="wide",
+    initial_sidebar_state="expanded"
+)
+
+# Custom CSS for marketing-friendly styling
+st.markdown("""
+<style>
+    .main-header {
+        font-size: 2.5rem;
+        font-weight: bold;
+        color: #1f4e79;
+    }
+    .insight-box {
+        background-color: #f0f7ff;
+        padding: 20px;
+        border-radius: 10px;
+        border-left: 5px solid #1f4e79;
+    }
+    .metric-card {
+        background-color: #ffffff;
+        padding: 15px;
+        border-radius: 8px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.1);
+    }
+    .recommendation {
+        background-color: #e8f5e9;
+        padding: 15px;
+        border-radius: 8px;
+        border-left: 4px solid #4caf50;
+        margin: 10px 0;
+    }
+    .warning-box {
+        background-color: #fff3e0;
+        padding: 15px;
+        border-radius: 8px;
+        border-left: 4px solid #ff9800;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# -----------------------------------------------------------------------------
+# DATA PROCESSING ENGINE
+# -----------------------------------------------------------------------------
+
+class MarketingAnalytics:
     def __init__(self):
         self.model = None
         self.label_encoders = {}
         self.is_trained = False
+        self.course_insights = {}
 
-    def preprocess_data(self, df):
-        """
-        Prepares data for analysis and modeling.
-        Expected columns: 'date', 'course_name', 'registered_count'
-        """
+    def load_and_process(self, df):
+        """Process raw registration data into marketing-friendly format"""
         data = df.copy()
-        
-        # Convert date column
         data['date'] = pd.to_datetime(data['date'])
-        
-        # Extract time features
         data['year'] = data['date'].dt.year
         data['month'] = data['date'].dt.month
+        data['month_name'] = data['date'].dt.strftime('%b')
         data['quarter'] = data['date'].dt.quarter
+        data['quarter_label'] = 'Q' + data['quarter'].astype(str)
         
-        # Encode categorical data (Course Names)
-        le = LabelEncoder()
-        try:
-            data['course_encoded'] = le.fit_transform(data['course_name'])
-            self.label_encoders['course'] = le
-        except Exception as e:
-            st.error(f"Error encoding course names: {e}")
-            raise e
+        # Marketing-relevant features
+        data['is_peak_season'] = data['month'].isin([1, 2, 9, 10])  # Common peak months
+        data['is_low_season'] = data['month'].isin([6, 7, 12])  # Common low months
         
         return data
 
-    def get_performance_overview(self, df):
-        """
-        Generates aggregated statistics for management reporting.
-        Returns: Dict of dataframes for reporting.
-        """
-        data = self.preprocess_data(df)
+    def generate_marketing_insights(self, df):
+        """Generate actionable insights for marketing team"""
+        data = self.load_and_process(df)
         
-        # 1. Course Performance (Total & Average)
-        course_perf = data.groupby('course_name')['registered_count'].agg(
-            ['sum', 'mean', 'std', 'count']
-        ).rename(columns={
-            'sum': 'Total Registrations',
-            'mean': 'Avg Registrations',
-            'std': 'Std Dev',
-            'count': 'Data Points'
-        }).sort_values('Total Registrations', ascending=False)
-
-        # 2. Seasonal/Monthly Trends
-        monthly_trends = data.groupby('month')['registered_count'].sum()
-        # Create safe labels
-        monthly_trends.index = [f"Month {i}" for i in monthly_trends.index]
-        
-        # 3. Quarterly Performance
-        quarterly_perf = data.groupby('quarter')['registered_count'].sum()
-        quarterly_perf.index = [f"Q{i}" for i in quarterly_perf.index]
-
-        # 4. Course x Quarter Matrix (Heatmap data)
-        course_quarter_matrix = pd.pivot_table(
-            data, 
-            values='registered_count', 
-            index='course_name', 
-            columns='quarter', 
-            aggfunc='sum', 
-            fill_value=0
-        )
-
-        return {
-            'course_performance': course_perf,
-            'monthly_trends': monthly_trends,
-            'quarterly_performance': quarterly_perf,
-            'course_quarter_matrix': course_quarter_matrix,
-            'processed_data': data
+        insights = {
+            'monthly_performance': {},
+            'course_seasonality': {},
+            'quarterly_trends': {},
+            'marketing_recommendations': []
         }
-
-    def train_prediction_model(self, df):
-        """
-        Trains a Random Forest model to predict future registrations.
-        Features: Month, Quarter, Course Encoding
-        Target: Registered Count
-        """
-        data = self.preprocess_data(df)
         
-        features = ['month', 'quarter', 'course_encoded']
+        # Monthly aggregation for all courses
+        monthly = data.groupby(['month', 'month_name'])['registered_count'].sum().reset_index()
+        insights['monthly_totals'] = monthly
+        
+        # Per-course analysis
+        for course in data['course_name'].unique():
+            course_data = data[data['course_name'] == course]
+            
+            # Best and worst months
+            monthly_perf = course_data.groupby('month_name')['registered_count'].sum()
+            best_month = monthly_perf.idxmax() if not monthly_perf.empty else 'N/A'
+            worst_month = monthly_perf.idxmin() if not monthly_perf.empty else 'N/A'
+            peak_value = monthly_perf.max() if not monthly_perf.empty else 0
+            low_value = monthly_perf.min() if not monthly_perf.empty else 0
+            
+            # Seasonality score (coefficient of variation)
+            mean_reg = course_data['registered_count'].mean()
+            std_reg = course_data['registered_count'].std()
+            seasonality_score = (std_reg / mean_reg) if mean_reg > 0 else 0
+            
+            # Categorize course type
+            if seasonality_score < 0.5:
+                course_type = "Stable Year-Round"
+                marketing_strategy = "Maintain consistent presence. Good for steady revenue."
+            elif seasonality_score < 1.0:
+                course_type = "Moderately Seasonal"
+                marketing_strategy = "Increase budget 2 months before peak months."
+            else:
+                course_type = "Highly Seasonal"
+                marketing_strategy = "Concentrate 70% of budget in peak months only."
+            
+            insights['course_seasonality'][course] = {
+                'best_month': best_month,
+                'worst_month': worst_month,
+                'peak_value': peak_value,
+                'low_value': low_value,
+                'seasonality_score': seasonality_score,
+                'course_type': course_type,
+                'marketing_strategy': marketing_strategy,
+                'monthly_data': monthly_perf.to_dict()
+            }
+        
+        # Quarterly trends
+        quarterly = data.groupby(['year', 'quarter'])['registered_count'].sum().reset_index()
+        insights['quarterly_trends'] = quarterly
+        
+        return insights, data
+
+    def train_forecast_model(self, df):
+        """Train model to predict next year's monthly registrations per course"""
+        data = self.load_and_process(df)
+        
+        # Prepare features
+        le = LabelEncoder()
+        data['course_encoded'] = le.fit_transform(data['course_name'])
+        self.label_encoders['course'] = le
+        
+        features = ['month', 'quarter', 'course_encoded', 'year']
         X = data[features]
         y = data['registered_count']
-
-        # Train Random Forest Regressor
-        self.model = RandomForestRegressor(
-            n_estimators=100, 
-            random_state=42, 
-            n_jobs=-1
-        )
+        
+        self.model = RandomForestRegressor(n_estimators=100, random_state=42)
         self.model.fit(X, y)
         self.is_trained = True
         
-        # Calculate training error for reporting
-        predictions = self.model.predict(X)
-        mae = mean_absolute_error(y, predictions)
+        # Feature importance for marketing insight
+        importance = pd.DataFrame({
+            'feature': features,
+            'importance': self.model.feature_importances_
+        }).sort_values('importance', ascending=False)
         
-        return mae
+        return mean_absolute_error(y, self.model.predict(X)), importance
 
-    def predict_future(self, future_dates_config):
-        """
-        Generates predictions based on user configuration.
-        future_dates_config: List of dicts with 'course_name', 'year', 'month'
-        """
+    def predict_next_year(self, courses, year=2026):
+        """Generate monthly predictions for marketing planning"""
         if not self.is_trained:
-            raise Exception("Model not trained. Please train the model first.")
-        
+            return None
+            
         predictions = []
-        for item in future_dates_config:
+        for course in courses:
             try:
-                if 'course' not in self.label_encoders:
-                    raise Exception("Encoder not initialized.")
-                
-                try:
-                    course_code = self.label_encoders['course'].transform([item['course_name']])[0]
-                except ValueError:
-                    st.warning(f"Course '{item['course_name']}' was not in training data. Skipping prediction.")
-                    continue
-                
-                input_data = pd.DataFrame({
-                    'month': [item['month']],
-                    'quarter': [pd.Timestamp(f"{item['year']}-{item['month']}-01").quarter],
-                    'course_encoded': [course_code]
-                })
-                
-                pred = self.model.predict(input_data)[0]
-                predictions.append({
-                    'course': item['course_name'],
-                    'year': item['year'],
-                    'month': item['month'],
-                    'predicted_registrations': max(0, pred)
-                })
-            except Exception as e:
-                st.error(f"Prediction error for {item['course_name']}: {e}")
+                course_code = self.label_encoders['course'].transform([course])[0]
+                for month in range(1, 13):
+                    input_data = pd.DataFrame({
+                        'month': [month],
+                        'quarter': [(month-1)//3 + 1],
+                        'course_encoded': [course_code],
+                        'year': [year]
+                    })
+                    pred = self.model.predict(input_data)[0]
+                    predictions.append({
+                        'course': course,
+                        'year': year,
+                        'month': month,
+                        'month_name': datetime.date(2024, month, 1).strftime('%b'),
+                        'predicted_registrations': max(0, round(pred))
+                    })
+            except:
                 continue
-            
-        if not predictions:
-            return pd.DataFrame()
-            
+                
         return pd.DataFrame(predictions)
 
 # -----------------------------------------------------------------------------
-# SECTION 2: STREAMLIT INTERFACE (Frontend)
+# STREAMLIT MARKETING DASHBOARD
 # -----------------------------------------------------------------------------
 
-st.set_page_config(
-    page_title="Course Registration Intelligence",
-    page_icon="📊",
-    layout="wide"
-)
-
-st.title("🎓 Course Registration & Performance Intelligence")
+st.markdown('<p class="main-header">📊 Course Marketing Intelligence Dashboard</p>', unsafe_allow_html=True)
 st.markdown("""
-    **Management Dashboard**: Upload historical registration data to analyze course performance, 
-    identify seasonal trends, and predict future enrollment numbers.
-    
-    *Note: All data processing happens locally in this session. No data is stored on external servers.*
+**Purpose**: Identify optimal timing for course marketing campaigns based on historical registration patterns.
 """)
 
-# Initialize Session State
+# Initialize
 if 'analytics' not in st.session_state:
-    st.session_state.analytics = CourseAnalytics()
+    st.session_state.analytics = MarketingAnalytics()
 if 'data_loaded' not in st.session_state:
     st.session_state.data_loaded = False
-if 'model_trained' not in st.session_state:
-    st.session_state.model_trained = False
+if 'current_year' not in st.session_state:
+    st.session_state.current_year = 2023
 
-# Sidebar for Data Upload
+# -----------------------------------------------------------------------------
+# SIDEBAR: Data Upload & Year Selection
+# -----------------------------------------------------------------------------
+
 with st.sidebar:
-    st.header("Data Configuration")
-    st.info("Upload a CSV with columns: `date`, `course_name`, `registered_count`")
+    st.header("📁 Data Management")
     
-    # --- FIXED SAMPLE DATA GENERATION ---
-    # Generating safe, valid sample data without using deprecated pandas features
-    try:
-        courses = ['Math 101', 'CS 101', 'Physics 202', 'History 303']
-        sample_rows = []
-        
-        # Generate dates manually to avoid any pandas frequency alias issues
-        start_date = datetime.datetime(2022, 1, 1)
-        end_date = datetime.datetime(2024, 12, 31)
-        
-        current_date = start_date
-        while current_date <= end_date:
-            for course in courses:
-                month = current_date.month
-                # Simulate realistic data patterns
-                base = 100 if 'Math' in course or 'CS' in course else 50
-                # Add some seasonality (higher in Sept, lower in Dec/Jan)
-                seasonal_factor = 0
-                if month in [9, 10]: seasonal_factor = 0.5  # Peak season
-                if month in [12, 1, 7]: seasonal_factor = -0.5  # Low season
-                
-                count = int(base * (1 + seasonal_factor) + np.random.randint(-10, 10))
-                
-                sample_rows.append({
-                    'date': current_date.strftime('%Y-%m-%d'),
-                    'course_name': course,
-                    'registered_count': max(0, count)
-                })
-            # Move to next month
-            if current_date.month == 12:
-                current_date = datetime.datetime(current_date.year + 1, 1, 1)
-            else:
-                current_date = datetime.datetime(current_date.year, current_date.month + 1, 1)
-                
-        sample_df = pd.DataFrame(sample_rows)
-        csv = sample_df.to_csv(index=False)
-        
-        st.download_button(
-            label="📥 Download Sample Data Template",
-            data=csv,
-            file_name='sample_registration_data.csv',
-            mime='text/csv',
-        )
-    except Exception as e:
-        st.error(f"Error generating sample data: {e}")
-        st.stop()
+    # Year selector for multi-year view
+    st.subheader("Select Year to View")
+    year_options = [2023, 2024, 2025, 2026]
+    selected_year = st.selectbox("Year", year_options, index=0)
+    st.session_state.current_year = selected_year
     
-    uploaded_file = st.file_uploader("Upload Dataset (CSV)", type=['csv'])
+    st.divider()
     
-    if uploaded_file is not None:
+    # File upload
+    st.subheader("Upload Registration Data")
+    st.markdown("""
+    **Required CSV Format:**
+    - `date` (YYYY-MM-DD)
+    - `course_name` 
+    - `registered_count`
+    """)
+    
+    uploaded_file = st.file_uploader("Choose CSV file", type="csv")
+    
+    if uploaded_file:
         try:
             df = pd.read_csv(uploaded_file)
-            required_columns = ['date', 'course_name', 'registered_count']
-            if not all(col in df.columns for col in required_columns):
-                st.error(f"Missing columns. Required: {required_columns}")
-                st.stop()
-            
-            st.session_state.data_loaded = True
-            st.success("Data loaded successfully!")
-            st.info(f"Records found: {len(df)}")
-            st.write("### Data Preview")
-            st.dataframe(df.head())
-            
+            required = ['date', 'course_name', 'registered_count']
+            if all(col in df.columns for col in required):
+                st.session_state.data_loaded = True
+                st.session_state.df = df
+                st.success(f"✅ Loaded {len(df)} records")
+            else:
+                st.error(f"Missing columns: {set(required) - set(df.columns)}")
         except Exception as e:
-            st.error(f"Error loading file: {e}")
-            st.stop()
-    else:
-        st.warning("Please upload a CSV file to begin analysis.")
-        st.stop()
+            st.error(f"Error: {e}")
+    
+    # Sample data generator
+    st.divider()
+    if st.button("📥 Generate Sample Data"):
+        # Create realistic sample based on the PDF structure
+        courses = [
+            'ICDL', 'GRE', 'CATIA', 'CCNA', 'AWS', 'C#', 'GDP', 'CYBER',
+            'CISA', 'ACDL', 'AZURE', 'CSM', 'CASP', 'CKAD', 'COMPTIA A+',
+            'DIGITAL ACADEMY', 'ANDROID', 'DATA PROTECTION', 'CIVIL'
+        ]
+        
+        sample_data = []
+        start_date = datetime.date(2023, 1, 1)
+        
+        for year in [2023, 2024, 2025]:
+            for month in range(1, 13):
+                for course in courses:
+                    # Simulate realistic patterns
+                    base = np.random.randint(5, 50)
+                    
+                    # Seasonal adjustments
+                    if month in [1, 2, 9, 10]:  # Peak months
+                        multiplier = 1.5
+                    elif month in [6, 7, 12]:  # Low months
+                        multiplier = 0.5
+                    else:
+                        multiplier = 1.0
+                    
+                    # Course-specific popularity
+                    if course in ['ICDL', 'GRE', 'CATIA', 'CCNA']:
+                        popularity = 2.0
+                    elif course in ['AWS', 'C#', 'CYBER']:
+                        popularity = 1.5
+                    else:
+                        popularity = 1.0
+                    
+                    count = int(base * multiplier * popularity * np.random.uniform(0.7, 1.3))
+                    
+                    sample_data.append({
+                        'date': f"{year}-{month:02d}-15",
+                        'course_name': course,
+                        'registered_count': max(0, count)
+                    })
+        
+        sample_df = pd.DataFrame(sample_data)
+        csv = sample_df.to_csv(index=False)
+        st.download_button("Download Sample CSV", csv, "sample_data.csv", "text/csv")
 
 if not st.session_state.data_loaded:
+    st.info("👆 Please upload your data or generate sample data to begin.")
     st.stop()
 
-# Main Dashboard Tabs
-tab1, tab2, tab3 = st.tabs(["📈 Performance Overview", "🔮 Predictive Analytics", "📉 Detailed Reports"])
+# -----------------------------------------------------------------------------
+# MAIN DASHBOARD: YEAR-SPECIFIC VIEW
+# -----------------------------------------------------------------------------
+
+df = st.session_state.df
+analytics = st.session_state.analytics
+
+# Filter data for selected year
+df['date'] = pd.to_datetime(df['date'])
+df_year = df[df['date'].dt.year == selected_year]
+
+if len(df_year) == 0:
+    st.warning(f"No data found for year {selected_year}. Showing all available data.")
+    df_year = df
+
+# Generate insights
+insights, processed_data = analytics.generate_marketing_insights(df_year)
+
+# -----------------------------------------------------------------------------
+# MARKETING SUMMARY CARDS
+# -----------------------------------------------------------------------------
+
+st.markdown(f"## 📅 Year {selected_year} Marketing Overview")
+
+col1, col2, col3, col4 = st.columns(4)
+
+with col1:
+    total_courses = len(df_year['course_name'].unique())
+    st.metric("Active Courses", total_courses)
+
+with col2:
+    total_regs = df_year['registered_count'].sum()
+    st.metric("Total Registrations", f"{total_regs:,}")
+
+with col3:
+    peak_month = insights['monthly_totals'].loc[insights['monthly_totals']['registered_count'].idxmax(), 'month_name']
+    st.metric("Peak Month", peak_month)
+
+with col4:
+    avg_per_course = df_year.groupby('course_name')['registered_count'].sum().mean()
+    st.metric("Avg per Course", f"{avg_per_course:.0f}")
+
+st.divider()
+
+# -----------------------------------------------------------------------------
+# TAB 1: MONTHLY PERFORMANCE VIEW
+# -----------------------------------------------------------------------------
+
+tab1, tab2, tab3, tab4 = st.tabs([
+    "📈 Monthly Trends", 
+    "🎯 Course Seasonality", 
+    "🔮 Forecast & Planning",
+    "📋 Marketing Recommendations"
+])
 
 with tab1:
-    st.header("Historical Performance Analysis")
+    st.header(f"Monthly Registration Trends - {selected_year}")
     
-    if st.button("Generate Performance Report", type="primary"):
-        try:
-            results = st.session_state.analytics.get_performance_overview(df)
-            
-            col1, col2 = st.columns(2)
-            with col1:
-                st.subheader("🏆 Top Performing Courses (Total)")
-                top_courses = results['course_performance'].head(5)
-                if not top_courses.empty:
-                    st.bar_chart(top_courses['Total Registrations'], color="#28a745")
-                else:
-                    st.write("No data available.")
-            
-            with col2:
-                st.subheader("📉 Underperforming Courses (Total)")
-                bottom_courses = results['course_performance'].tail(5)
-                if not bottom_courses.empty:
-                    st.bar_chart(bottom_courses['Total Registrations'], color="#dc3545")
-                else:
-                    st.write("No data available.")
+    # Monthly bar chart
+    monthly_data = insights['monthly_totals']
+    
+    fig_monthly = px.bar(
+        monthly_data,
+        x='month_name',
+        y='registered_count',
+        title=f"Total Registrations by Month ({selected_year})",
+        labels={'month_name': 'Month', 'registered_count': 'Registrations'},
+        color='registered_count',
+        color_continuous_scale='Blues'
+    )
+    fig_monthly.update_layout(height=400)
+    st.plotly_chart(fig_monthly, use_container_width=True)
+    
+    # Marketing insight
+    best_month = monthly_data.loc[monthly_data['registered_count'].idxmax(), 'month_name']
+    worst_month = monthly_data.loc[monthly_data['registered_count'].idxmin(), 'month_name']
+    
+    st.markdown(f"""
+    <div class="insight-box">
+        <h4>💡 Marketing Insight</h4>
+        <p><strong>{best_month}</strong> is your strongest month. Consider launching major campaigns in 
+        <strong>{worst_month}</strong> to boost low-performing periods.</p>
+    </div>
+    """, unsafe_allow_html=True)
+    
+    # Monthly breakdown table
+    st.subheader("Monthly Registration Details")
+    st.dataframe(monthly_data.sort_values('month'), use_container_width=True)
 
-            st.subheader("📅 Seasonal & Monthly Trends")
-            fig_monthly = px.line(
-                x=results['monthly_trends'].index, 
-                y=results['monthly_trends'].values,
-                labels={'x': 'Month', 'y': 'Total Registrations'},
-                title="Registration Volume by Month (All Courses)"
-            )
-            st.plotly_chart(fig_monthly, use_container_width=True)
-            
-            st.warning("Insight: Use the 'Detailed Reports' tab to see which specific courses drive these seasonal spikes.")
-
-        except Exception as e:
-            st.error(f"Analysis failed: {e}")
-            st.error(f"Details: {str(e)}")
+# -----------------------------------------------------------------------------
+# TAB 2: COURSE SEASONALITY ANALYSIS
+# -----------------------------------------------------------------------------
 
 with tab2:
-    st.header("AI Prediction Engine")
-    st.markdown("Train a model on the last 3 years of data to forecast future registration numbers.")
+    st.header("Course Performance by Seasonality")
     
-    if st.button("Train Prediction Model", type="primary"):
-        with st.spinner("Training Random Forest Regressor... This may take a moment."):
-            try:
-                mae = st.session_state.analytics.train_prediction_model(df)
-                st.session_state.model_trained = True
-                st.success(f"Model trained successfully! (Mean Absolute Error: {mae:.2f})")
-                st.info("Model is ready for predictions in the section below.")
-            except Exception as e:
-                st.error(f"Training failed: {e}")
-                st.error(f"Details: {str(e)}")
+    # Course selector
+    all_courses = list(insights['course_seasonality'].keys())
+    selected_courses = st.multiselect(
+        "Select courses to analyze",
+        all_courses,
+        default=all_courses[:5] if len(all_courses) > 5 else all_courses
+    )
     
-    if st.session_state.model_trained:
-        st.divider()
-        st.subheader("Generate Future Forecast")
+    if selected_courses:
+        # Create comparison chart
+        fig = go.Figure()
         
-        st.write("Enter parameters to simulate future performance:")
-        
-        col_a, col_b, col_c = st.columns(3)
-        with col_a:
-            courses = df['course_name'].unique()
-            selected_course = st.selectbox("Select Course", courses)
-        with col_b:
-            year = st.number_input("Year", min_value=2024, max_value=2030, value=2025)
-        with col_c:
-            month = st.slider("Month", 1, 12, 1)
+        for course in selected_courses:
+            course_info = insights['course_seasonality'][course]
+            monthly_dict = course_info['monthly_data']
             
-        if st.button("Predict Registration"):
-            try:
-                future_config = [
-                    {'course_name': selected_course, 'year': year, 'month': month}
-                ]
-                pred_df = st.session_state.analytics.predict_future(future_config)
+            months_order = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 
+                          'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec']
+            values = [monthly_dict.get(m, 0) for m in months_order]
+            
+            fig.add_trace(go.Scatter(
+                x=months_order,
+                y=values,
+                mode='lines+markers',
+                name=course,
+                line=dict(width=3)
+            ))
+        
+        fig.update_layout(
+            title="Monthly Registration Patterns by Course",
+            xaxis_title="Month",
+            yaxis_title="Registrations",
+            height=500,
+            hovermode='x unified'
+        )
+        st.plotly_chart(fig, use_container_width=True)
+        
+        # Course detail cards
+        st.subheader("Course Marketing Profiles")
+        
+        cols = st.columns(2)
+        for idx, course in enumerate(selected_courses):
+            with cols[idx % 2]:
+                info = insights['course_seasonality'][course]
                 
-                if not pred_df.empty:
-                    st.metric(
-                        label=f"Predicted Registrations for {selected_course}",
-                        value=f"{pred_df['predicted_registrations'].iloc[0]:.0f}"
-                    )
-                    st.caption("Note: Predictions are based on historical patterns. Actual results may vary.")
-                else:
-                    st.warning("Could not generate prediction. Ensure the course exists in training data.")
-            except Exception as e:
-                st.error(f"Prediction failed: {e}")
-                st.error(f"Details: {str(e)}")
-    else:
-        st.info("Please train the model first to enable predictions.")
+                st.markdown(f"""
+                <div class="metric-card">
+                    <h4>{course}</h4>
+                    <p><strong>Type:</strong> {info['course_type']}</p>
+                    <p><strong>Best Month:</strong> {info['best_month']} ({info['peak_value']} regs)</p>
+                    <p><strong>Worst Month:</strong> {info['worst_month']} ({info['low_value']} regs)</p>
+                    <div class="recommendation">
+                        <strong>Strategy:</strong> {info['marketing_strategy']}
+                    </div>
+                </div>
+                """, unsafe_allow_html=True)
+
+# -----------------------------------------------------------------------------
+# TAB 3: FORECASTING FOR NEXT YEAR
+# -----------------------------------------------------------------------------
 
 with tab3:
-    st.header("Detailed Management Reports")
+    st.header("Predictive Marketing Planning")
     
-    if st.button("Generate Detailed Matrices"):
-        try:
-            results = st.session_state.analytics.get_performance_overview(df)
+    if st.button("🚀 Train Forecasting Model", type="primary"):
+        with st.spinner("Training AI model on historical patterns..."):
+            mae, feature_importance = analytics.train_forecast_model(df)
+            st.session_state.model_trained = True
+            st.success(f"Model trained! Accuracy (MAE): {mae:.1f} registrations")
             
-            st.subheader("Course Performance by Quarter")
-            st.write("Heatmap showing registration intensity. Darker colors indicate higher volume.")
+            st.subheader("What Drives Registrations?")
+            st.dataframe(feature_importance, use_container_width=True)
+    
+    if st.session_state.get('model_trained', False):
+        st.divider()
+        st.subheader(f"📅 Predicted Performance for {selected_year + 1}")
+        
+        forecast_df = analytics.predict_next_year(all_courses, year=selected_year + 1)
+        
+        if forecast_df is not None and not forecast_df.empty:
+            # Aggregate forecast by month
+            monthly_forecast = forecast_df.groupby('month_name')['predicted_registrations'].sum().reset_index()
             
-            fig_heatmap = px.imshow(
-                results['course_quarter_matrix'],
-                labels={'x': 'Quarter', 'y': 'Course', 'color': 'Registrations'},
-                color_continuous_scale="Reds",
-                title="Registration Volume: Course vs Quarter"
+            fig_forecast = px.bar(
+                monthly_forecast,
+                x='month_name',
+                y='predicted_registrations',
+                title=f"Predicted Total Registrations by Month ({selected_year + 1})",
+                color='predicted_registrations',
+                color_continuous_scale='Greens'
             )
-            st.plotly_chart(fig_heatmap, use_container_width=True)
+            st.plotly_chart(fig_forecast, use_container_width=True)
             
-            st.subheader("Raw Data Tables")
-            st.write("### Course Performance Summary")
-            st.dataframe(results['course_performance'])
+            # Top predicted courses
+            course_forecast = forecast_df.groupby('course')['predicted_registrations'].sum().sort_values(ascending=False).head(10)
             
-            st.write("### Quarterly Aggregates")
-            st.dataframe(results['quarterly_performance'])
-        except Exception as e:
-            st.error(f"Report generation failed: {e}")
-            st.error(f"Details: {str(e)}")
+            st.subheader("Top 10 Courses to Focus On Next Year")
+            st.bar_chart(course_forecast)
+            
+            # Download forecast
+            csv = forecast_df.to_csv(index=False)
+            st.download_button("Download Full Forecast CSV", csv, "marketing_forecast.csv", "text/csv")
+        else:
+            st.warning("Could not generate forecast. Ensure model is trained.")
+
+# -----------------------------------------------------------------------------
+# TAB 4: ACTIONABLE RECOMMENDATIONS
+# -----------------------------------------------------------------------------
+
+with tab4:
+    st.header("🎯 Marketing Action Plan")
+    
+    # Generate automated recommendations
+    recommendations = []
+    
+    # Find courses with extreme seasonality
+    for course, info in insights['course_seasonality'].items():
+        if info['seasonality_score'] > 1.5:
+            recommendations.append({
+                'priority': 'HIGH',
+                'course': course,
+                'action': f"Concentrate budget in {info['best_month']}. Avoid marketing in {info['worst_month']}.",
+                'rationale': f"Highly seasonal (score: {info['seasonality_score']:.2f})"
+            })
+        elif info['peak_value'] > 50 and info['low_value'] < 10:
+            recommendations.append({
+                'priority': 'MEDIUM',
+                'course': course,
+                'action': f"Create off-season promotions for {info['worst_month']} to smooth demand.",
+                'rationale': f"High variance between peak ({info['peak_value']}) and low ({info['low_value']})"
+            })
+    
+    # Sort by priority
+    recommendations.sort(key=lambda x: {'HIGH': 0, 'MEDIUM': 1, 'LOW': 2}.get(x['priority'], 3))
+    
+    st.subheader("Automated Marketing Recommendations")
+    
+    for rec in recommendations:
+        color = {'HIGH': '🔴', 'MEDIUM': '🟡', 'LOW': '🟢'}.get(rec['priority'], '⚪')
+        
+        st.markdown(f"""
+        <div class="recommendation">
+            <h4>{color} {rec['priority']} PRIORITY: {rec['course']}</h4>
+            <p><strong>Action:</strong> {rec['action']}</p>
+            <p><em>{rec['rationale']}</em></p>
+        </div>
+        """, unsafe_allow_html=True)
+    
+    # Quarterly planning guide
+    st.subheader("Quarterly Marketing Calendar")
+    
+    quarterly_data = insights['quarterly_trends']
+    if not quarterly_data.empty:
+        q_summary = quarterly_data.groupby('quarter')['registered_count'].sum().reset_index()
+        q_summary['quarter_label'] = 'Q' + q_summary['quarter'].astype(str)
+        
+        fig_q = px.pie(
+            q_summary,
+            values='registered_count',
+            names='quarter_label',
+            title=f"Registration Distribution by Quarter ({selected_year})"
+        )
+        st.plotly_chart(fig_q, use_container_width=True)
+        
+        best_q = q_summary.loc[q_summary['registered_count'].idxmax(), 'quarter_label']
+        
+        st.markdown(f"""
+        <div class="insight-box">
+            <h4>💡 Quarterly Strategy</h4>
+            <p><strong>{best_q}</strong> is your strongest quarter. Allocate 40% of annual marketing budget here.</p>
+            <p>Use weaker quarters for brand building and content marketing rather than aggressive acquisition.</p>
+        </div>
+        """, unsafe_allow_html=True)
+
+# -----------------------------------------------------------------------------
+# FOOTER
+# -----------------------------------------------------------------------------
 
 st.markdown("---")
-st.markdown("Generated by Course Intelligence System | Powered by Python & Streamlit")
+st.markdown("""
+<small>
+<b>Course Marketing Intelligence System</b> | 
+Designed for Marketing Teams | 
+Data-driven campaign planning
+</small>
+""", unsafe_allow_html=True)
