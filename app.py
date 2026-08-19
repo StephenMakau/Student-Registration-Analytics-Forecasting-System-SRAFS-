@@ -76,19 +76,6 @@ class VisualAnalytics:
         data['quarter'] = data['date'].dt.quarter
         return data
 
-    def get_monthly_course_matrix(self, df):
-        """Create a matrix of courses x months for heatmap"""
-        data = self.preprocess_data(df)
-        matrix = pd.pivot_table(
-            data, 
-            values='registered_count', 
-            index='course_name', 
-            columns='month', 
-            aggfunc='sum', 
-            fill_value=0
-        )
-        return matrix
-
     def get_course_performance_by_month(self, df, month):
         """Get course performance for a specific month"""
         data = self.preprocess_data(df)
@@ -103,7 +90,7 @@ class VisualAnalytics:
         return perf
 
     def forecast_next_year_month(self, df, target_month):
-        """Simple forecasting based on historical averages + growth trend"""
+        """Forecast based on historical averages with growth factor"""
         data = self.preprocess_data(df)
         
         forecasts = []
@@ -116,4 +103,230 @@ class VisualAnalytics:
             if len(historical) > 0:
                 # Calculate average and apply a conservative growth factor
                 avg = historical['registered_count'].mean()
-                forecast_val = avg * 1.15 
+                forecast_val = avg * 1.15  # 15% growth assumption
+            else:
+                # If no history for this month, use 0
+                forecast_val = 0
+            
+            forecasts.append({
+                'course': course,
+                'forecasted_registrations': max(0, round(forecast_val))
+            })
+        
+        return pd.DataFrame(forecasts)
+
+# -----------------------------------------------------------------------------
+# STREAMLIT APP (VISUAL FIRST)
+# -----------------------------------------------------------------------------
+
+st.set_page_config(
+    page_title="Course Registration Intelligence",
+    page_icon="📊",
+    layout="wide",
+    initial_sidebar_state="collapsed"
+)
+
+# Minimal CSS for clean visual layout
+st.markdown("""
+<style>
+    .main {
+        background-color: #f0f2f6;
+    }
+    .stApp {
+        background-color: #f0f2f6;
+    }
+    .block-container {
+        padding-top: 2rem;
+        padding-bottom: 2rem;
+    }
+    .stMetric {
+        background-color: #ffffff;
+        padding: 20px;
+        border-radius: 10px;
+        box-shadow: 0 2px 4px rgba(0,0,0,0.05);
+    }
+    .stButton>button {
+        background-color: #0068c9;
+        color: white;
+        border-radius: 5px;
+        border: none;
+        font-weight: bold;
+    }
+    .stButton>button:hover {
+        background-color: #0056a3;
+    }
+</style>
+""", unsafe_allow_html=True)
+
+# Initialize
+analytics = VisualAnalytics()
+
+# Load Data
+if 'df' not in st.session_state:
+    st.session_state.df = analytics.load_default_data()
+
+df = st.session_state.df
+
+# -----------------------------------------------------------------------------
+# MAIN VISUAL DASHBOARD
+# -----------------------------------------------------------------------------
+
+# Header
+st.title("📊 Course Registration Intelligence")
+st.markdown("**Visual Analytics Dashboard** - Select a month to analyze performance and forecast future intake.")
+
+st.divider()
+
+# Month Selection
+month_options = {
+    1: "January", 2: "February", 3: "March", 4: "April",
+    5: "May", 6: "June", 7: "July", 8: "August",
+    9: "September", 10: "October", 11: "November", 12: "December"
+}
+
+col_select, col_stats = st.columns([1, 3])
+
+with col_select:
+    selected_month = st.selectbox(
+        "Select Month for Analysis",
+        options=list(month_options.keys()),
+        format_func=lambda x: f"{month_options[x]} ({x})"
+    )
+
+# Calculate stats for selected month
+current_data = df[pd.to_datetime(df['date']).dt.month == selected_month]
+total_regs = current_data['registered_count'].sum() if len(current_data) > 0 else 0
+active_courses = current_data['course_name'].nunique() if len(current_data) > 0 else 0
+
+with col_stats:
+    c1, c2, c3 = st.columns(3)
+    c1.metric("Total Registrations (Historical)", f"{total_regs:,}")
+    c2.metric("Active Courses", active_courses)
+    c3.metric("Data Years Available", "3 Years")
+
+st.divider()
+
+# -----------------------------------------------------------------------------
+# VISUALIZATION TABS
+# -----------------------------------------------------------------------------
+
+tab1, tab2 = st.tabs(["📈 Monthly Performance Analysis", "🔮 AI Forecast & Planning"])
+
+with tab1:
+    if total_regs == 0:
+        st.warning("No data available for this month.")
+    else:
+        # Get performance data
+        perf_data = analytics.get_course_performance_by_month(df, selected_month)
+        
+        if perf_data is not None and len(perf_data) > 0:
+            # VISUAL 1: Top Courses Bar Chart
+            st.subheader(`f"Top Performing Courses in {month_options[selected_month]}"`)
+            
+            top_courses = perf_data.head(15)  # Show top 15
+            fig_top = px.bar(
+                top_courses,
+                x='registrations',
+                y='course_name',
+                orientation='h',
+                title=f"Highest Registration Volume - {month_options[selected_month]} (Historical Average)",
+                color='registrations',
+                color_continuous_scale='greens'
+            )
+            fig_top.update_layout(
+                height=600,
+                xaxis_title="Number of Registrations",
+                yaxis_title="Course Name",
+                showlegend=False
+            )
+            st.plotly_chart(fig_top, use_container_width=True)
+            
+            # VISUAL 2: Bottom Courses
+            st.subheader(f"Lowest Performing Courses in {month_options[selected_month]}")
+            
+            bottom_courses = perf_data.tail(15)
+            if len(bottom_courses) > 0:
+                fig_bottom = px.bar(
+                    bottom_courses,
+                    x='registrations',
+                    y='course_name',
+                    orientation='h',
+                    title=f"Lowest Registration Volume - {month_options[selected_month]} (Requires Marketing Intervention)",
+                    color='registrations',
+                    color_continuous_scale='reds'
+                )
+                fig_bottom.update_layout(
+                    height=400,
+                    xaxis_title="Number of Registrations",
+                    yaxis_title="Course Name",
+                    showlegend=False
+                )
+                st.plotly_chart(fig_bottom, use_container_width=True)
+            
+            # VISUAL 3: Full Data Table
+            st.subheader("Complete Course Performance Data")
+            st.dataframe(perf_data, use_container_width=True, hide_index=True)
+
+with tab2:
+    st.subheader(f"🔮 Forecast for {month_options[selected_month]} {datetime.datetime.now().year + 1}")
+    st.markdown("AI-powered prediction of registration numbers for next year's intake based on historical trends.")
+    
+    if st.button("Generate Forecast Visualization", type="primary"):
+        with st.spinner("Processing historical data and generating forecasts..."):
+            forecast_df = analytics.forecast_next_year_month(df, selected_month)
+            
+            if forecast_df is not None and len(forecast_df) > 0:
+                # Sort forecast
+                forecast_df = forecast_df.sort_values('forecasted_registrations', ascending=False)
+                
+                # VISUAL 4: Forecast Bar Chart
+                st.subheader(f"Predicted Registration Volume - {month_options[selected_month]} {datetime.datetime.now().year + 1}")
+                
+                fig_forecast = px.bar(
+                    forecast_df,
+                    x='forecasted_registrations',
+                    y='course',
+                    orientation='h',
+                    title=f"Forecasted Demand - {month_options[selected_month]} {datetime.datetime.now().year + 1}",
+                    color='forecasted_registrations',
+                    color_continuous_scale='blues'
+                )
+                fig_forecast.update_layout(
+                    height=600,
+                    xaxis_title="Predicted Registrations",
+                    yaxis_title="Course Name",
+                    showlegend=False
+                )
+                st.plotly_chart(fig_forecast, use_container_width=True)
+                
+                # VISUAL 5: Strategic Focus Areas
+                st.subheader("🎯 Strategic Marketing Focus Areas")
+                
+                # Calculate top 5 for focus
+                top_5 = forecast_df.head(5)
+                if len(top_5) > 0:
+                    fig_focus = px.pie(
+                        top_5,
+                        values='forecasted_registrations',
+                        names='course',
+                        title=f"Top 5 Courses to Prioritize for {month_options[selected_month]} {datetime.datetime.now().year + 1} (Total Predicted: {top_5['forecasted_registrations'].sum()})"
+                    )
+                    fig_focus.update_layout(height=400)
+                    st.plotly_chart(fig_focus, use_container_width=True)
+                
+                # Download forecast
+                csv = forecast_df.to_csv(index=False)
+                st.download_button(
+                    "📥 Download Full Forecast Data (CSV)",
+                    csv,
+                    f"forecast_{month_options[selected_month]}_{datetime.datetime.now().year + 1}.csv",
+                    "text/csv"
+                )
+            else:
+                st.error("Could not generate forecast. Insufficient historical data.")
+
+# -----------------------------------------------------------------------------
+# FOOTER
+# -----------------------------------------------------------------------------
+st.divider()
+st.markdown("Course Registration Intelligence System | Data-Driven Marketing Analytics")
