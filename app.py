@@ -249,12 +249,13 @@ with tab1:
                         st.markdown(f"#### Top Performing Courses in {year}")
                         top_courses_year = perf_data_year.head(10)  # Show top 10 for yearly breakdown
                         if len(top_courses_year) > 0:
+                            # FIXED: Removed backticks and used proper f-string
                             fig_top_year = px.bar(
                                 top_courses_year,
                                 x='registrations',
                                 y='course_name',
                                 orientation='h',
-                                title={`Top 10 Courses - {month_options[selected_month]} {year}`},
+                                title=f"Top 10 Courses - {month_options[selected_month]} {year}",
                                 color='registrations',
                                 color_continuous_scale='greens'
                             )
