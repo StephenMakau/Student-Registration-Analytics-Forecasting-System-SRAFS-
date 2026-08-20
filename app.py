@@ -69,6 +69,7 @@ class VisualAnalytics:
 
     def preprocess_data(self, df):
         data = df.copy()
+        # Ensure date is datetime
         data['date'] = pd.to_datetime(data['date'])
         data['year'] = data['date'].dt.year
         data['month'] = data['date'].dt.month
@@ -196,8 +197,11 @@ with col_select:
         format_func=lambda x: f"{month_options[x]} ({x})"
     )
 
+# CRITICAL FIX: Convert date column to datetime BEFORE any filtering
+df['date'] = pd.to_datetime(df['date'])
+
 # Calculate stats for selected month
-current_data = df[pd.to_datetime(df['date']).dt.month == selected_month]
+current_data = df[df['date'].dt.month == selected_month]
 total_regs = current_data['registered_count'].sum() if len(current_data) > 0 else 0
 active_courses = current_data['course_name'].nunique() if len(current_data) > 0 else 0
 
@@ -223,15 +227,14 @@ with tab1:
         
         # Define the years to analyze
         years_to_analyze = [2023, 2024, 2025]
-        valid_year_data = {}
+        valid_years = []
         
         # Check which years have data for the selected month
+        # FIX: We now safely use datetime properties because df['date'] is converted above
         for year in years_to_analyze:
-            temp_data = df[pd.to_datetime(df['date']).dt.year == year]
+            temp_data = df[df['date'].dt.year == year]
             if not temp_data[temp_data['date'].dt.month == selected_month].empty:
-                valid_year_data[year] = True
-        
-        valid_years = list(valid_year_data.keys())
+                valid_years.append(year)
         
         if not valid_years:
             st.error("No valid data found for any year for the selected month.")
@@ -249,7 +252,6 @@ with tab1:
                         st.markdown(f"#### Top Performing Courses in {year}")
                         top_courses_year = perf_data_year.head(10)  # Show top 10 for yearly breakdown
                         if len(top_courses_year) > 0:
-                            # FIXED: Removed backticks and used proper f-string
                             fig_top_year = px.bar(
                                 top_courses_year,
                                 x='registrations',
