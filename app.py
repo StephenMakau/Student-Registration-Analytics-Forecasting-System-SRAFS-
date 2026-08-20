@@ -221,7 +221,8 @@ with tab1:
         
         if perf_data is not None and len(perf_data) > 0:
             # VISUAL 1: Top Courses Bar Chart
-            st.subheader(`f"Top Performing Courses in {month_options[selected_month]}"`)
+            # FIXED: Removed backticks around the f-string
+            st.subheader(f"Top Performing Courses in {month_options[selected_month]}")
             
             top_courses = perf_data.head(15)  # Show top 15
             fig_top = px.bar(
