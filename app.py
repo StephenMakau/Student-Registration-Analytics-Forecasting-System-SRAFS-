@@ -76,10 +76,13 @@ class VisualAnalytics:
         data['quarter'] = data['date'].dt.quarter
         return data
 
-    def get_course_performance_by_month(self, df, month):
-        """Get course performance for a specific month"""
+    def get_course_performance_by_month(self, df, month, year=None):
+        """Get course performance for a specific month, optionally filtered by year"""
         data = self.preprocess_data(df)
         month_data = data[data['month'] == month]
+        
+        if year is not None:
+            month_data = month_data[month_data['year'] == year]
         
         if month_data.empty:
             return None
@@ -216,57 +219,137 @@ with tab1:
     if total_regs == 0:
         st.warning("No data available for this month.")
     else:
-        # Get performance data
-        perf_data = analytics.get_course_performance_by_month(df, selected_month)
+        st.info("The following section provides a year-by-year breakdown of course performance for the selected month, followed by a combined historical analysis.")
         
-        if perf_data is not None and len(perf_data) > 0:
-            # VISUAL 1: Top Courses Bar Chart
-            # FIXED: Removed backticks around the f-string
-            st.subheader(f"Top Performing Courses in {month_options[selected_month]}")
+        # Define the years to analyze
+        years_to_analyze = [2023, 2024, 2025]
+        valid_year_data = {}
+        
+        # Check which years have data for the selected month
+        for year in years_to_analyze:
+            temp_data = df[pd.to_datetime(df['date']).dt.year == year]
+            if not temp_data[temp_data['date'].dt.month == selected_month].empty:
+                valid_year_data[year] = True
+        
+        valid_years = list(valid_year_data.keys())
+        
+        if not valid_years:
+            st.error("No valid data found for any year for the selected month.")
+        else:
+            # Generate Year-by-Year Breakdown
+            for year in valid_years:
+                st.subheader(f"📊 {year} Performance Breakdown for {month_options[selected_month]}")
+                
+                perf_data_year = analytics.get_course_performance_by_month(df, selected_month, year=year)
+                
+                if perf_data_year is not None and len(perf_data_year) > 0:
+                    col_year1, col_year2 = st.columns(2)
+                    
+                    with col_year1:
+                        st.markdown(f"#### Top Performing Courses in {year}")
+                        top_courses_year = perf_data_year.head(10)  # Show top 10 for yearly breakdown
+                        if len(top_courses_year) > 0:
+                            fig_top_year = px.bar(
+                                top_courses_year,
+                                x='registrations',
+                                y='course_name',
+                                orientation='h',
+                                title={`Top 10 Courses - {month_options[selected_month]} {year}`},
+                                color='registrations',
+                                color_continuous_scale='greens'
+                            )
+                            fig_top_year.update_layout(
+                                height=400,
+                                xaxis_title="Number of Registrations",
+                                yaxis_title="Course Name",
+                                showlegend=False
+                            )
+                            st.plotly_chart(fig_top_year, use_container_width=True)
+                        else:
+                            st.write("No top performing courses data available.")
+                    
+                    with col_year2:
+                        st.markdown(f"#### Lowest Performing Courses in {year}")
+                        bottom_courses_year = perf_data_year.tail(10)
+                        if len(bottom_courses_year) > 0:
+                            fig_bottom_year = px.bar(
+                                bottom_courses_year,
+                                x='registrations',
+                                y='course_name',
+                                orientation='h',
+                                title=f"Lowest 10 Courses - {month_options[selected_month]} {year}",
+                                color='registrations',
+                                color_continuous_scale='reds'
+                            )
+                            fig_bottom_year.update_layout(
+                                height=400,
+                                xaxis_title="Number of Registrations",
+                                yaxis_title="Course Name",
+                                showlegend=False
+                            )
+                            st.plotly_chart(fig_bottom_year, use_container_width=True)
+                        else:
+                            st.write("No lowest performing courses data available.")
+                    
+                    st.markdown("---")  # Separator between years
+                else:
+                    st.warning(f"No data available for {year}.")
             
-            top_courses = perf_data.head(15)  # Show top 15
-            fig_top = px.bar(
-                top_courses,
-                x='registrations',
-                y='course_name',
-                orientation='h',
-                title=f"Highest Registration Volume - {month_options[selected_month]} (Historical Average)",
-                color='registrations',
-                color_continuous_scale='greens'
-            )
-            fig_top.update_layout(
-                height=600,
-                xaxis_title="Number of Registrations",
-                yaxis_title="Course Name",
-                showlegend=False
-            )
-            st.plotly_chart(fig_top, use_container_width=True)
+            # Combined Historical Analysis
+            st.subheader(f"📈 Combined Historical Analysis for {month_options[selected_month]} (All Years)")
+            st.markdown("This graph aggregates data from all available years to show overall course performance trends.")
             
-            # VISUAL 2: Bottom Courses
-            st.subheader(f"Lowest Performing Courses in {month_options[selected_month]}")
+            perf_data_combined = analytics.get_course_performance_by_month(df, selected_month)
             
-            bottom_courses = perf_data.tail(15)
-            if len(bottom_courses) > 0:
-                fig_bottom = px.bar(
-                    bottom_courses,
+            if perf_data_combined is not None and len(perf_data_combined) > 0:
+                # VISUAL 1: Top Courses Bar Chart (Combined)
+                st.subheader(f"Top Performing Courses in {month_options[selected_month]} (Combined Data)")
+                
+                top_courses = perf_data_combined.head(15)  # Show top 15
+                fig_top = px.bar(
+                    top_courses,
                     x='registrations',
                     y='course_name',
                     orientation='h',
-                    title=f"Lowest Registration Volume - {month_options[selected_month]} (Requires Marketing Intervention)",
+                    title=f"Highest Registration Volume - {month_options[selected_month]} (Historical Average)",
                     color='registrations',
-                    color_continuous_scale='reds'
+                    color_continuous_scale='greens'
                 )
-                fig_bottom.update_layout(
-                    height=400,
+                fig_top.update_layout(
+                    height=600,
                     xaxis_title="Number of Registrations",
                     yaxis_title="Course Name",
                     showlegend=False
                 )
-                st.plotly_chart(fig_bottom, use_container_width=True)
-            
-            # VISUAL 3: Full Data Table
-            st.subheader("Complete Course Performance Data")
-            st.dataframe(perf_data, use_container_width=True, hide_index=True)
+                st.plotly_chart(fig_top, use_container_width=True)
+                
+                # VISUAL 2: Bottom Courses (Combined)
+                st.subheader(f"Lowest Performing Courses in {month_options[selected_month]} (Combined Data)")
+                
+                bottom_courses = perf_data_combined.tail(15)
+                if len(bottom_courses) > 0:
+                    fig_bottom = px.bar(
+                        bottom_courses,
+                        x='registrations',
+                        y='course_name',
+                        orientation='h',
+                        title=f"Lowest Registration Volume - {month_options[selected_month]} (Requires Marketing Intervention)",
+                        color='registrations',
+                        color_continuous_scale='reds'
+                    )
+                    fig_bottom.update_layout(
+                        height=400,
+                        xaxis_title="Number of Registrations",
+                        yaxis_title="Course Name",
+                        showlegend=False
+                    )
+                    st.plotly_chart(fig_bottom, use_container_width=True)
+                
+                # VISUAL 3: Full Data Table (Combined)
+                st.subheader("Complete Course Performance Data (Combined)")
+                st.dataframe(perf_data_combined, use_container_width=True, hide_index=True)
+            else:
+                st.error("No combined data available.")
 
 with tab2:
     st.subheader(f"🔮 Forecast for {month_options[selected_month]} {datetime.datetime.now().year + 1}")
